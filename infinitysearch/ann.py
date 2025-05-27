@@ -77,13 +77,13 @@ class InfinitySearch(BaseANN):
         final_emb = model(full_X)
         return model, final_emb, D0, self.device, None
 
-    def fit(self, X: np.ndarray, config: dict | str | torch.nn.Module | None = "optuna"):
+    def fit(self, X: np.ndarray, config: dict | str | torch.nn.Module | None = "optuna", verbose: bool = True):
         X = X.astype(np.float32)
         X_tensor = torch.tensor(X)
 
         if isinstance(config, dict):
             print("🔧 Running Optuna with fixed parameters...")
-            config_dict = run_optuna_search(X, self._q, fixed=config)
+            config_dict = run_optuna_search(X, self._q, fixed=config, verbose=verbose)
 
         else:
             cache_dir = os.path.expanduser("~/.cache/infinitysearch/")
@@ -100,22 +100,21 @@ class InfinitySearch(BaseANN):
                 config_dict = all_configs.get("last")
                 if config_dict is None:
                     print("⚠ No 'last' config found. Running Optuna...")
-                    config_dict = run_optuna_search(X, self._q)
+                    config_dict = run_optuna_search(X, self._q, verbose=verbose)
                     all_configs["last"] = {k: v for k, v in config_dict.items() if k != "model"}
 
             elif config == "optuna":
                 print("🔍 Running full Optuna search...")
-                config_dict = run_optuna_search(X, self._q)
+                config_dict = run_optuna_search(X, self._q, verbose=verbose)
                 all_configs["last"] = {k: v for k, v in config_dict.items() if k != "model"}
 
             elif isinstance(config, str):
                 config_dict = all_configs.get(config)
                 if config_dict is None:
                     print(f"⚠ No config named '{config}' found. Running Optuna and saving it...")
-                    config_dict = run_optuna_search(X, self._q)
+                    config_dict = run_optuna_search(X, self._q, verbose=verbose)
                     all_configs[config] = {k: v for k, v in config_dict.items() if k != "model"}
                     all_configs["last"] = all_configs[config]
-
             else:
                 raise ValueError(
                     "Invalid config type. Must be 'optuna', 'last', a name string, or a config dictionary.")
@@ -124,6 +123,8 @@ class InfinitySearch(BaseANN):
             with open(cache_file, "w") as f:
                 json.dump(all_configs, f)
 
+        if verbose:
+            print(f"Training model with config: {config}")
         metric_fn = config_dict.get("metric_fn", None)
         emb_metric_fn = config_dict.get("emb_metric_fn", None)
 
@@ -139,7 +140,7 @@ class InfinitySearch(BaseANN):
             lambda_triangle=config_dict.get("lambda_triangle", 0.0),
             val=config_dict.get("val", False),
             val_points=config_dict.get("val_points", None),
-            verbose=config_dict.get("verbose", False),
+            verbose=verbose,
             metric=config_dict.get("metric", 'euclidean'),
             emb_metric=config_dict.get("emb_metric", 'euclidean'),
             metric_fn=metric_fn,

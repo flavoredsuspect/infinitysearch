@@ -48,7 +48,7 @@ import json
 import numpy as np
 from scipy.spatial.distance import cdist
 
-def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None):
+def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:bool = True):
     import optuna
     from .utils import rel, emb_dist
     from .models import EmbNet
