@@ -1,0 +1,17 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual env
+.venv/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Editor & OS files
+*.swp
+*.DS_Store
+.idea/
+.vscode/
