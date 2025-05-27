@@ -88,7 +88,7 @@ class InfinitySearch(BaseANN):
         else:
             cache_dir = os.path.expanduser("~/.cache/infinitysearch/")
             os.makedirs(cache_dir, exist_ok=True)
-            cache_file = os.path.join(cache_dir, "named_configs.json")
+            cache_file = os.path.join(cache_dir, "configs.json")
 
             if os.path.exists(cache_file):
                 with open(cache_file, "r") as f:

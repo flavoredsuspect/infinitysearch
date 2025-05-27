@@ -1,4 +1,4 @@
-# main.py
+# test.py
 import time
 import argparse
 import numpy as np
