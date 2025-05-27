@@ -33,8 +33,10 @@ PYBIND11_MODULE(vp_tree, m)
         .value("Euclidean", VpTree::Metric::Euclidean)
         .value("Manhattan", VpTree::Metric::Manhattan)
         .value("Cosine",    VpTree::Metric::Cosine)
-        .value("Jaccard",    VpTree::Metric::Cosine)
+        .value("Jaccard",   VpTree::Metric::Jaccard)
+        .value("Custom",    VpTree::Metric::Custom)
         .export_values();
+
 
     /* main class ---------------------------------------------------------- */
     py::class_<VpTree>(m, "VpTree")
@@ -44,6 +46,9 @@ PYBIND11_MODULE(vp_tree, m)
              py::arg("metric_embed") = VpTree::Metric::Euclidean,
              py::arg("metric_real")  = VpTree::Metric::Euclidean,
              py::arg("epsilon")      = 1e-8f)
+
+        .def("set_custom_real", &VpTree::set_custom_real)
+        .def("set_custom_embed", &VpTree::set_custom_embed)
 
         /* pure-Python data ------------------------------------------------ */
         .def("create",

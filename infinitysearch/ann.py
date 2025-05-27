@@ -26,6 +26,7 @@ class InfinitySearch(BaseANN):
         self._object_type = 'Float'
         self._epsilon = 0.0
         self._q = q
+        self._prepared = False
 
     def train_inductive_model(
         self, X: torch.Tensor, q=3.0, k_neighbors=10,
@@ -80,32 +81,48 @@ class InfinitySearch(BaseANN):
         X = X.astype(np.float32)
         X_tensor = torch.tensor(X)
 
-        if isinstance(config, str):
-            if config == "optuna":
-                print("ℹ Using Optuna to find best hyperparameters...")
-                config_dict = run_optuna_search(X_tensor, self._q)
-            elif config == "last":
-                cache_path = os.path.expanduser("~/.cache/infinitysearch/last_config.json")
-                if os.path.exists(cache_path):
-                    with open(cache_path, 'r') as f:
-                        config_dict = json.load(f)
-                    print("✔ Loaded last configuration from cache.")
-                else:
-                    print("⚠ No previous config found. Running Optuna instead...")
-                    config_dict = run_optuna_search(X_tensor, self._q)
-            else:
-                raise ValueError("Invalid string option for config. Use 'optuna', 'last', a config dictionary, or a torch.nn.Module.")
-        elif isinstance(config, dict):
-            if "model" in config:
-                print("✔ Using user-provided model and config dictionary.")
-                config_dict = config
-            else:
-                print("ℹ Using Optuna with fixed parameters from config...")
-                config_dict = run_optuna_search(X_tensor, self._q, fixed=config)
-        elif isinstance(config, torch.nn.Module):
-            config_dict = {"model": config}
+        if isinstance(config, dict):
+            print("🔧 Running Optuna with fixed parameters...")
+            config_dict = run_optuna_search(X, self._q, fixed=config)
+
         else:
-            raise ValueError("Invalid config type. Must be 'optuna', 'last', a config dictionary, or a torch.nn.Module.")
+            cache_dir = os.path.expanduser("~/.cache/infinitysearch/")
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_file = os.path.join(cache_dir, "named_configs.json")
+
+            if os.path.exists(cache_file):
+                with open(cache_file, "r") as f:
+                    all_configs = json.load(f)
+            else:
+                all_configs = {}
+
+            if config == "last":
+                config_dict = all_configs.get("last")
+                if config_dict is None:
+                    print("⚠ No 'last' config found. Running Optuna...")
+                    config_dict = run_optuna_search(X, self._q)
+                    all_configs["last"] = {k: v for k, v in config_dict.items() if k != "model"}
+
+            elif config == "optuna":
+                print("🔍 Running full Optuna search...")
+                config_dict = run_optuna_search(X, self._q)
+                all_configs["last"] = {k: v for k, v in config_dict.items() if k != "model"}
+
+            elif isinstance(config, str):
+                config_dict = all_configs.get(config)
+                if config_dict is None:
+                    print(f"⚠ No config named '{config}' found. Running Optuna and saving it...")
+                    config_dict = run_optuna_search(X, self._q)
+                    all_configs[config] = {k: v for k, v in config_dict.items() if k != "model"}
+                    all_configs["last"] = all_configs[config]
+
+            else:
+                raise ValueError(
+                    "Invalid config type. Must be 'optuna', 'last', a name string, or a config dictionary.")
+
+            # Save updated cache
+            with open(cache_file, "w") as f:
+                json.dump(all_configs, f)
 
         metric_fn = config_dict.get("metric_fn", None)
         emb_metric_fn = config_dict.get("emb_metric_fn", None)
@@ -157,18 +174,28 @@ class InfinitySearch(BaseANN):
         self.index.create_numpy(X, emb, list(range(len(X))))
         print("✔ InfinitySearch fit & index done")
 
-    def query(self, v: np.ndarray, k: int = 1):
-        return self.index.search(self.totalk, self.topk, self.query_embed, self.queries_np, False)
-
-    def prepare_query(self, X: np.ndarray, n: int =1, k:int = 1):
+    def prepare_query(self, X: np.ndarray, n: int = 1, k: int = 1):
         self.queries_np = X.astype(np.float32)
-
         with torch.no_grad():
             self.query_embed = self.model(
-                torch.tensor(X, dtype=torch.float32).to(self.device)).cpu().numpy()
-
+                torch.tensor(X, dtype=torch.float32).to(self.device)
+            ).cpu().numpy()
         self.topk = k
-        self.totalk= max(n,k)
+        self.totalk = max(n, k)
+        self._prepared = True
 
-    def run_batch_query(self):
-        return self.index.search_batch(self.totalk, self.topk, self.query_embed, self.queries_np, False)
+    def query(self, v: np.ndarray, n: int = 1, k: int = 1):
+        if not self._prepared:
+            self.prepare_query(v, n=n, k=k)
+        result = self.index.search(self.totalk, self.topk, self.query_embed, self.queries_np, False)
+        self._prepared = False
+        return result
+
+    def run_batch_query(self, X: np.ndarray = None, n: int = 1, k: int = 1):
+        if not self._prepared:
+            if X is None:
+                raise ValueError("No query data provided for automatic preparation.")
+            self.prepare_query(X, n=n, k=k)
+        result = self.index.search_batch(self.totalk, self.topk, self.query_embed, self.queries_np, False)
+        self._prepared = False
+        return result

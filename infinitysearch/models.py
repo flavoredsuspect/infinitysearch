@@ -56,6 +56,7 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None):
 
     if fixed is None:
         fixed = {}
+    X = torch.as_tensor(X, dtype=torch.float32) if not isinstance(X, torch.Tensor) else X
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 

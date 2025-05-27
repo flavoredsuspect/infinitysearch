@@ -50,7 +50,13 @@ struct Matrix {
 // ─── VP-Tree ----------------------------------------------------------------
 class VpTree {
 public:
-    enum class Metric { Euclidean, Manhattan, Cosine, Jaccard };
+    enum class Metric {
+        Euclidean,
+        Manhattan,
+        Cosine,
+        Jaccard,
+        Custom = -1
+    };
     struct SearchResult { std::vector<int> ids, dists; };
 
     explicit VpTree(float q = 1.f,
@@ -83,6 +89,13 @@ public:
                  std::size_t nQuery,
                  bool retDist=false) const;
 
+    void set_custom_real(std::function<double(const float*, const float*, int)> f) {
+        custom_real_fn_ = std::move(f);
+    }
+
+    void set_custom_embed(std::function<double(const float*, const float*, int)> f) {
+        custom_embed_fn_ = std::move(f);
+    }
 private:
     double l2(const float* a,const float* b,int d) const;
     double l1(const float* a,const float* b,int d) const;
@@ -90,6 +103,8 @@ private:
     double jaccard(const float* a,const float* b,int d) const;
     double dist_embed(const float* a,const float* b,int row) const;
     double dist_real (const float* a,const float* b,int row) const;
+    std::function<double(const float*, const float*, int)> custom_real_fn_ = nullptr;
+    std::function<double(const float*, const float*, int)> custom_embed_fn_ = nullptr;
 
     struct Heap {
         using Elem = std::pair<double,int>;
@@ -223,6 +238,8 @@ inline double VpTree::dist_embed(const float* a,const float* b,int r) const {
         case Metric::Manhattan: return l1(a, b, embed_.dim);
         case Metric::Cosine:    return cosine(a, b, embed_.dim, embed_norm_q_, embed_norms_[r]);
         case Metric::Jaccard:   return jaccard(a, b, embed_.dim);
+        case Metric::Custom:
+            if (custom_embed_fn_) return custom_embed_fn_(a, b, r);
     }
     return 0.0;
 }
@@ -232,6 +249,8 @@ inline double VpTree::dist_real(const float* a,const float* b,int r) const {
         case Metric::Manhattan: return l1(a, b, real_.dim);
         case Metric::Cosine:    return cosine(a, b, real_.dim, real_norm_q_, real_norms_[r]);
         case Metric::Jaccard:   return jaccard(a, b, real_.dim);
+        case Metric::Custom:
+            if (custom_real_fn_) return custom_real_fn_(a, b, r);
     }
     return 0.0;
 }

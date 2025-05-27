@@ -9,9 +9,14 @@ ext_modules = [
         sources=['cpp_extension/vp_tree_bind.cpp'],
         include_dirs=[pybind11.get_include()],
         language='c++',
-        extra_compile_args=['-std=c++17', '-mavx', '-mfma']
+        extra_compile_args=[
+            '-O3', '-ffast-math', '-flto',
+            '-march=native', '-mavx2', '-mfma',
+            '-std=c++20', '-Wall'
+        ]
     )
 ]
+
 
 setup(
     name='infinitysearch',
