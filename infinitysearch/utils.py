@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-
+import vp_tree
 def rel(true_neighbors, run_neighbors, metrics=None, *args, **kwargs):
     all_deltas = []
     for gt, pred in zip(true_neighbors, run_neighbors):
@@ -43,3 +43,18 @@ def emb_dist(a: torch.Tensor, b: torch.Tensor = None, metric: str = "euclidean")
         return 1 - torch.matmul(a_norm, b_norm.transpose(0, 1))
     else:
         raise ValueError(f"Unknown embedding metric: {metric}")
+def lambda_to_cpp_metric(pyfunc):
+    if not callable(pyfunc):
+        raise ValueError("Expected a callable for custom distance function.")
+    def wrapper(a, b):
+        return float(pyfunc(np.asarray(a), np.asarray(b)))
+    return wrapper
+
+
+metric_enum_map = {
+    "euclidean":  vp_tree.Metric.Euclidean,
+    "manhattan":  vp_tree.Metric.Manhattan,
+    "cosine":     vp_tree.Metric.Cosine,
+    # "jaccard": not supported or removed
+    "correlation": vp_tree.Metric.Cosine,  # if approximation ok
+}

@@ -45,9 +45,6 @@ import optuna
 import torch
 import os
 import json
-from .models import EmbNet
-from .utils import emb_dist, rel
-from .fermat import fermat_gpu_exact
 import numpy as np
 from scipy.spatial.distance import cdist
 
@@ -72,13 +69,14 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None):
 
             output_dim = fixed.get("output_dim") or trial.suggest_int("output_dim", dim_in // 3, int(dim_in * 1.5))
             emb_metric = fixed.get("emb_metric") or trial.suggest_categorical("emb_metric", ["euclidean", "manhattan", "cosine", "correlation"])
+            metric = fixed.get("metric", "euclidean")
             batch_size = fixed.get("batch_size") or trial.suggest_categorical("batch_size", [128, 256, 512])
             epochs = fixed.get("epochs") or trial.suggest_int("epochs", 50, 200)
             lr = fixed.get("lr") or trial.suggest_float("lr", 1e-4, 1e-2, log=True)
             lambda_stress = fixed.get("lambda_stress") or trial.suggest_float("lambda_stress", 0.1, 5.0)
 
-            # Compute distance
-            D0 = emb_dist(train_X, metric=emb_metric)
+            # Ground truth distance matrix
+            D0 = emb_dist(train_X, metric=metric)
             try:
                 M = fermat_gpu_exact(D0, q)
             except RuntimeError as e:
@@ -98,16 +96,14 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None):
                 D_emb = emb_dist(emb, metric=emb_metric)
                 mask = M.float()
                 loss_s = torch.sqrt(((D_emb - M) ** 2 * mask).sum() / mask.sum())
-                opt.zero_grad()
-                loss_s.backward()
-                opt.step()
+                opt.zero_grad(); loss_s.backward(); opt.step()
 
             with torch.no_grad():
                 emb_train = model(train_X)
                 emb_val = model(val_X)
-                val_dists = cdist(emb_val.cpu(), emb_train.cpu())
-                knn = np.argsort(val_dists, axis=1)[:, :1]
-                gt_dists = cdist(val_X.cpu(), train_X.cpu())
+                pred_dists = emb_dist(emb_val, emb_train, metric=emb_metric).cpu().numpy()
+                gt_dists = emb_dist(val_X, train_X, metric=metric).cpu().numpy()
+                knn = np.argsort(pred_dists, axis=1)[:, :1]
                 true_knn = np.argsort(gt_dists, axis=1)[:, :1]
                 rel_error = rel(true_knn, knn)
                 return rel_error
@@ -123,10 +119,8 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None):
     best = study.best_trial.params
     best["model"] = EmbNet(X.shape[1], output_dim=best["output_dim"]).to(device)
 
-    # after best["model"] = ...
     cache_path = os.path.expanduser("~/.cache/infinitysearch/last_config.json")
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-
     json_ready = {k: v for k, v in best.items() if k != "model"}
     with open(cache_path, "w") as f:
         json.dump(json_ready, f)

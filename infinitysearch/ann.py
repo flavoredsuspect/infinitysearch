@@ -9,7 +9,7 @@ import os
 
 from .models import EmbNet, run_optuna_search
 from .fermat import fermat_gpu_exact
-from .utils import rel, emb_dist
+from .utils import rel, emb_dist, metric_enum_map, lambda_to_cpp_metric
 
 
 class BaseANN:
@@ -32,14 +32,16 @@ class InfinitySearch(BaseANN):
         epochs=500, batch_size=1024, lr=1e-3,
         lambda_stress=1.0, lambda_triangle=0,
         val=False, val_points=None, verbose=False,
-        metric='euclidean', emb_metric='euclidean', emb_metric_fn=None,
+        metric='euclidean', emb_metric='euclidean',
+        metric_fn=None, emb_metric_fn=None,
         model=None
     ):
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        X = X.to(device)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X = X.to(self.device)
         n = X.size(0)
         full_X = X
-        D0 = emb_metric_fn(X) if emb_metric_fn else emb_dist(X, metric=emb_metric)
+        D0 = metric_fn(X) if metric_fn else emb_dist(X, metric=metric)
+
         try:
             M = fermat_gpu_exact(D0, q)
         except RuntimeError as e:
@@ -52,7 +54,7 @@ class InfinitySearch(BaseANN):
         M = (M - M.min()) / (M.max() - M.min())
 
         if model is None:
-            model = EmbNet(X.size(1), output_dim=128).to(device)
+            model = EmbNet(X.size(1), output_dim=128).to(self.device)
 
         opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
         sched = CosineAnnealingWarmRestarts(opt, T_0=50, T_mult=2)
@@ -60,19 +62,19 @@ class InfinitySearch(BaseANN):
         for ep in range(epochs):
             model.train()
             emb = model(X)
-            D_emb = emb_dist(emb, metric=emb_metric)
+            D_emb = emb_metric_fn(emb) if emb_metric_fn else emb_dist(emb, metric=emb_metric)
             mask = M.float()
             loss_s = torch.sqrt(((D_emb - M) ** 2 * mask).sum() / mask.sum())
-            idx = torch.randint(0, n, (batch_size, 3), device=device)
+            idx = torch.randint(0, n, (batch_size, 3), device=self.device)
             i, j, k = idx.t()
-            raw = emb_dist(emb[i], emb[j]) + emb_dist(emb[j], emb[k]) - emb_dist(emb[i], emb[k])
+            raw = emb_dist(emb[i], emb[j], metric=emb_metric) + emb_dist(emb[j], emb[k], metric=emb_metric) - emb_dist(emb[i], emb[k], metric=emb_metric)
             loss_t = F.relu(raw).min()
             loss = lambda_stress * loss_s + lambda_triangle * loss_t
             opt.zero_grad(); loss.backward(); opt.step(); sched.step(ep)
             if verbose and ep % 100 == 0:
                 print(f"Epoch {ep} | stress={loss_s:.4f} | tri={loss_t:.4f}")
         final_emb = model(full_X)
-        return model, final_emb, D0, device, None
+        return model, final_emb, D0, self.device, None
 
     def fit(self, X: np.ndarray, config: dict | str | torch.nn.Module | None = "optuna"):
         X = X.astype(np.float32)
@@ -105,6 +107,9 @@ class InfinitySearch(BaseANN):
         else:
             raise ValueError("Invalid config type. Must be 'optuna', 'last', a config dictionary, or a torch.nn.Module.")
 
+        metric_fn = config_dict.get("metric_fn", None)
+        emb_metric_fn = config_dict.get("emb_metric_fn", None)
+
         model = config_dict.get("model", None)
         model, _, D0, device, _ = self.train_inductive_model(
             X_tensor,
@@ -120,24 +125,50 @@ class InfinitySearch(BaseANN):
             verbose=config_dict.get("verbose", False),
             metric=config_dict.get("metric", 'euclidean'),
             emb_metric=config_dict.get("emb_metric", 'euclidean'),
+            metric_fn=metric_fn,
+            emb_metric_fn=emb_metric_fn,
             model=model
         )
 
         self.config = config_dict
         model.eval()
-        emb = model(X_tensor.to(device)).cpu().detach().numpy().astype(np.float32)
-        self.index = vp_tree.VpTree(self._q, vp_tree.Metric.Euclidean, vp_tree.Metric.Euclidean)
+        emb = model(X_tensor.to(self.device)).cpu().detach().numpy().astype(np.float32)
+
+        metric_raw = config_dict.get("metric", 'euclidean')
+        emb_metric_raw = config_dict.get("emb_metric", 'euclidean')
+
+        if callable(metric_raw) or callable(emb_metric_raw):
+            print(
+                "⚠ Warning: Using custom distance functions may significantly reduce "
+                "performance due to lack of C++ optimization.")
+
+            self.index = vp_tree.VpTree(
+                self._q,
+                lambda_to_cpp_metric(emb_metric_raw) if callable(emb_metric_raw) else metric_enum_map.get(emb_metric_raw, -1),
+                lambda_to_cpp_metric(metric_raw) if callable(metric_raw) else metric_enum_map.get(metric_raw, -1)
+            )
+        else:
+            self.index = vp_tree.VpTree(
+                self._q,
+                metric_enum_map.get(emb_metric_raw, -1),
+                metric_enum_map.get(metric_raw, -1)
+            )
+        self.model=model
         self.index.create_numpy(X, emb, list(range(len(X))))
         print("✔ InfinitySearch fit & index done")
 
     def query(self, v: np.ndarray, k: int = 1):
-        v = v.astype(np.float32)
-        res = self.index.search(k, v, v, returnDistances=False)
-        return res.ids[:k]
+        return self.index.search(self.totalk, self.topk, self.query_embed, self.queries_np, False)
 
-    def prepare_batch_query(self, X: np.ndarray, n: int):
+    def prepare_query(self, X: np.ndarray, n: int =1, k:int = 1):
         self.queries_np = X.astype(np.float32)
-        self.kk = n
+
+        with torch.no_grad():
+            self.query_embed = self.model(
+                torch.tensor(X, dtype=torch.float32).to(self.device)).cpu().numpy()
+
+        self.topk = k
+        self.totalk= max(n,k)
 
     def run_batch_query(self):
-        return self.index.search_batch(1, self.kk, self.queries_np, self.queries_np, False)
+        return self.index.search_batch(self.totalk, self.topk, self.query_embed, self.queries_np, False)
