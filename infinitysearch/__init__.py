@@ -1,2 +1,2 @@
-from .Ann import InfinitySearch, BaseANN
+from .ann import InfinitySearch, BaseANN
 
