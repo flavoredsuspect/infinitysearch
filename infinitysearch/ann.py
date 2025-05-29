@@ -200,3 +200,4 @@ class InfinitySearch(BaseANN):
         result = self.index.search_batch(self.totalk, self.topk, self.query_embed, self.queries_np, False)
         self._prepared = False
         return result
+
