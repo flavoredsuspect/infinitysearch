@@ -20,6 +20,7 @@
 #include <memory>
 #include <queue>
 #include <stdbool.h>
+#include <fstream>
 
 // ─── quick pow(q) helpers (unchanged) ────────────────────────────────────────
 constexpr float pow_q_fast(float x, float q) {
@@ -50,6 +51,7 @@ struct Matrix {
 // ─── VP-Tree ----------------------------------------------------------------
 class VpTree {
 public:
+
     enum class Metric {
         Euclidean,
         Manhattan,
@@ -59,10 +61,9 @@ public:
     };
     struct SearchResult { std::vector<int> ids, dists; };
 
-    explicit VpTree(float q = 1.f,
-                    Metric metric_embed = Metric::Euclidean,
-                    Metric metric_real  = Metric::Euclidean,
-                    float eps = 1e-8f)
+    VpTree() = default;
+
+    VpTree(float q, Metric metric_embed, Metric metric_real, float eps)
         : q_(q)
         , eps_(eps)
         , metric_embed_(metric_embed)
@@ -71,6 +72,7 @@ public:
     {
         if (q_ <= 0.f) throw std::invalid_argument("q must be > 0");
     }
+
 
     void create(std::vector<std::vector<float>> real,
                 std::vector<std::vector<float>> embed,
@@ -96,6 +98,115 @@ public:
     void set_custom_embed(std::function<double(const float*, const float*, int)> f) {
         custom_embed_fn_ = std::move(f);
     }
+
+
+    void save(const std::string& path) const {
+        std::ofstream out(path, std::ios::binary);
+        if (!out) throw std::runtime_error("Failed to open file");
+
+        int version = 1;
+        out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+        out.write(reinterpret_cast<const char*>(&q_), sizeof(q_));
+        out.write(reinterpret_cast<const char*>(&eps_), sizeof(eps_));
+
+        int metE = static_cast<int>(metric_embed_);
+        int metR = static_cast<int>(metric_real_);
+        out.write(reinterpret_cast<const char*>(&metE), sizeof(int));
+        out.write(reinterpret_cast<const char*>(&metR), sizeof(int));
+
+        int dimE = embed_.dim, rowsE = embed_.rows();
+        out.write(reinterpret_cast<const char*>(&dimE), sizeof(dimE));
+        out.write(reinterpret_cast<const char*>(&rowsE), sizeof(rowsE));
+        out.write(reinterpret_cast<const char*>(embed_.data.data()), embed_.data.size() * sizeof(float));
+
+        int dimR = real_.dim, rowsR = real_.rows();
+        out.write(reinterpret_cast<const char*>(&dimR), sizeof(dimR));
+        out.write(reinterpret_cast<const char*>(&rowsR), sizeof(rowsR));
+        out.write(reinterpret_cast<const char*>(real_.data.data()), real_.data.size() * sizeof(float));
+
+        int item_count = int(items_.size());
+        out.write(reinterpret_cast<const char*>(&item_count), sizeof(item_count));
+        out.write(reinterpret_cast<const char*>(items_.data()), item_count * sizeof(int));
+
+        int node_count = int(nodes_.size());
+        out.write(reinterpret_cast<const char*>(&node_count), sizeof(node_count));
+        out.write(reinterpret_cast<const char*>(nodes_.data()), node_count * sizeof(Node));
+
+        out.write(reinterpret_cast<const char*>(&root_), sizeof(root_));
+
+        int norm_size = int(real_norms_.size());
+        out.write(reinterpret_cast<const char*>(&norm_size), sizeof(norm_size));
+        out.write(reinterpret_cast<const char*>(real_norms_.data()), norm_size * sizeof(double));
+        out.write(reinterpret_cast<const char*>(embed_norms_.data()), norm_size * sizeof(double));
+    }
+
+
+    void load(const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error("Failed to open file");
+
+        int version;
+        in.read(reinterpret_cast<char*>(&version), sizeof(version));
+        if (version != 1)
+            throw std::runtime_error("Unsupported index file version");
+
+        in.read(reinterpret_cast<char*>(&q_), sizeof(q_));
+        in.read(reinterpret_cast<char*>(&eps_), sizeof(eps_));
+
+        int metE, metR;
+        in.read(reinterpret_cast<char*>(&metE), sizeof(metE));
+        in.read(reinterpret_cast<char*>(&metR), sizeof(metR));
+        metric_embed_ = static_cast<Metric>(metE);
+        metric_real_  = static_cast<Metric>(metR);
+
+        // Load embed_ matrix
+        int dimE, rowsE;
+        in.read(reinterpret_cast<char*>(&dimE), sizeof(dimE));
+        in.read(reinterpret_cast<char*>(&rowsE), sizeof(rowsE));
+        embed_.dim = dimE;
+        embed_.data.resize(dimE * rowsE);
+        in.read(reinterpret_cast<char*>(embed_.data.data()), embed_.data.size() * sizeof(float));
+
+        // Load real_ matrix
+        int dimR, rowsR;
+        in.read(reinterpret_cast<char*>(&dimR), sizeof(dimR));
+        in.read(reinterpret_cast<char*>(&rowsR), sizeof(rowsR));
+        real_.dim = dimR;
+        real_.data.resize(dimR * rowsR);
+        in.read(reinterpret_cast<char*>(real_.data.data()), real_.data.size() * sizeof(float));
+
+        // Load items
+        int item_count;
+        in.read(reinterpret_cast<char*>(&item_count), sizeof(item_count));
+        items_.resize(item_count);
+        in.read(reinterpret_cast<char*>(items_.data()), item_count * sizeof(int));
+
+        // Load nodes
+        int node_count;
+        in.read(reinterpret_cast<char*>(&node_count), sizeof(node_count));
+        nodes_.resize(node_count);
+        in.read(reinterpret_cast<char*>(nodes_.data()), node_count * sizeof(Node));
+
+        // Load root index
+        in.read(reinterpret_cast<char*>(&root_), sizeof(root_));
+
+        // Load norms
+        int norm_size;
+        in.read(reinterpret_cast<char*>(&norm_size), sizeof(norm_size));
+        real_norms_.resize(norm_size);
+        embed_norms_.resize(norm_size);
+        in.read(reinterpret_cast<char*>(real_norms_.data()), norm_size * sizeof(double));
+        in.read(reinterpret_cast<char*>(embed_norms_.data()), norm_size * sizeof(double));
+
+        // Rebuild rows_
+        int n = embed_.rows();
+        rows_.resize(n);
+        std::iota(rows_.begin(), rows_.end(), 0);
+    }
+
+
+
+
 private:
     double l2(const float* a,const float* b,int d) const;
     double l1(const float* a,const float* b,int d) const;

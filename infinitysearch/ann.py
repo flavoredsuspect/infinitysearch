@@ -10,8 +10,8 @@ import os
 from .models import EmbNet, run_optuna_search
 from .fermat import fermat_gpu_exact
 from .utils import rel, emb_dist, metric_enum_map, lambda_to_cpp_metric
-
-
+import joblib
+import shutil
 class BaseANN:
     def fit(self, X: np.ndarray):
         raise NotImplementedError
@@ -27,6 +27,12 @@ class InfinitySearch(BaseANN):
         self._epsilon = 0.0
         self._q = q
         self._prepared = False
+
+    def _build_model(self):
+        input_dim = self.config.get("input_dim", 784)  # default for Fashion-MNIST
+        output_dim = self.config.get("output_dim", 128)
+        self.model = EmbNet(input_dim=input_dim, output_dim=output_dim)
+
 
     def train_inductive_model(
         self, X: torch.Tensor, q=3.0, k_neighbors=10,
@@ -201,3 +207,119 @@ class InfinitySearch(BaseANN):
         self._prepared = False
         return result
 
+    def save(self, name="last"):
+        cache_root = os.path.expanduser("~/.cache/infinitysearch/")
+        index_dir = os.path.join(cache_root, "indices")
+        model_dir = os.path.join(cache_root, "models")
+        config_path = os.path.join(cache_root, "configs.json")
+
+        os.makedirs(index_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
+
+        # Save model weights
+        model_path = os.path.join(model_dir, f"{name}_model.pt")
+        torch.save(self.model.state_dict(), model_path)
+
+        # Save config with input/output dim and q
+        config_copy = {k: v for k, v in self.config.items() if k != "model"}
+        config_copy["input_dim"] = self.model.net[0].in_features
+        config_copy["output_dim"] = self.model.net[-1].out_features
+        config_copy["q"] = self._q
+
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                all_configs = json.load(f)
+        else:
+            all_configs = {}
+
+        all_configs[name] = config_copy
+        all_configs["last"] = config_copy
+
+        with open(config_path, "w") as f:
+            json.dump(all_configs, f)
+
+        # Save index
+        self.index.save(os.path.join(index_dir, name))
+
+    @classmethod
+    def load(cls, name="last"):
+        cache_root = os.path.expanduser("~/.cache/infinitysearch/")
+        index_path = os.path.join(cache_root, "indices", name)
+        model_path = os.path.join(cache_root, "models", f"{name}_model.pt")
+        config_path = os.path.join(cache_root, "configs.json")
+
+        # Check config existence
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"❌ Config file not found: {config_path}")
+
+        with open(config_path, "r") as f:
+            all_configs = json.load(f)
+
+        if name not in all_configs:
+            raise ValueError(f"❌ No config named '{name}' found in {config_path}")
+
+        # Check model and index existence
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"❌ Model file not found: {model_path}")
+        if not os.path.exists(index_path):
+            raise FileNotFoundError(f"❌ Index file not found: {index_path}")
+
+        config = all_configs[name]
+        q = config.get("q", 3)
+
+        obj = cls(q=q)
+        obj.config = config
+        obj.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Build and load model
+        obj._build_model()
+        obj.model.to(obj.device)
+        obj.model.load_state_dict(torch.load(model_path, map_location=obj.device))
+        obj.model.eval()
+
+        # Load index
+        metric_raw = config.get("metric", 'euclidean')
+        emb_metric_raw = config.get("emb_metric", 'euclidean')
+        obj.index = vp_tree.VpTree(
+            obj._q,
+            lambda_to_cpp_metric(emb_metric_raw) if callable(emb_metric_raw) else metric_enum_map.get(emb_metric_raw,
+                                                                                                      -1),
+            lambda_to_cpp_metric(metric_raw) if callable(metric_raw) else metric_enum_map.get(metric_raw, -1)
+        )
+        obj.index.load(index_path)
+
+        return obj
+
+    @staticmethod
+    def remove(name="all"):
+        """
+        Remove cached config, model, and index files for a given name.
+        If name == "all", clear the entire InfinitySearch cache (with confirmation).
+        """
+        cache_root = os.path.expanduser("~/.cache/infinitysearch/")
+        paths = {
+            "metadata": os.path.join(cache_root, "metadata", f"{name}.json"),
+            "models": os.path.join(cache_root, "models", f"{name}_model.pt"),
+            "indices": os.path.join(cache_root, "indices", name),
+        }
+
+        if name == "all":
+            confirm = input("⚠ This will delete the entire InfinitySearch cache. Proceed? (y/n): ")
+            if confirm.lower() == 'y':
+                shutil.rmtree(cache_root, ignore_errors=True)
+                print("🗑️ All cache cleared.")
+            else:
+                print("❌ Cancelled.")
+            return
+
+        removed = False
+        for label, path in paths.items():
+            if os.path.exists(path):
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+                print(f"✅ Removed {label} cache: {path}")
+                removed = True
+        if not removed:
+            print(f"⚠ No cache found for name '{name}'.")

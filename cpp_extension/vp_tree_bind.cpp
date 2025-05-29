@@ -40,6 +40,7 @@ PYBIND11_MODULE(vp_tree, m)
 
     /* main class ---------------------------------------------------------- */
     py::class_<VpTree>(m, "VpTree")
+        .def(py::init<>())
         // constructor ------------------------------------------------------
         .def(py::init<float, VpTree::Metric, VpTree::Metric, float>(),
              py::arg("q")            = 1.0f,
@@ -49,6 +50,8 @@ PYBIND11_MODULE(vp_tree, m)
 
         .def("set_custom_real", &VpTree::set_custom_real)
         .def("set_custom_embed", &VpTree::set_custom_embed)
+        .def("save", &VpTree::save)
+        .def("load", &VpTree::load)
 
         /* pure-Python data ------------------------------------------------ */
         .def("create",

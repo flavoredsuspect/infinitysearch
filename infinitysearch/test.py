@@ -36,6 +36,10 @@ def main():
     rel_err = rel(true_nn, results)
     print(f"Mean absolute relative error: {rel_err:.4f}")
 
+    # Save the model and config
+    infsearch.save("test")
+
+
 
 if __name__ == '__main__':
     main()

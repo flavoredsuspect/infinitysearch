@@ -12,7 +12,7 @@ ext_modules = [
         extra_compile_args=[
             '-O3', '-ffast-math', '-flto',
             '-march=native', '-mavx2', '-mfma',
-            '-std=c++20', '-Wall'
+            '-std=c++17', '-Wall'
         ]
     )
 ]
@@ -25,7 +25,7 @@ setup(
     long_description=open("README.md").read() if os.path.exists("README.md") else "",
     long_description_content_type='text/markdown',
     author='Antonio Pariente',
-    license='Custom Non-Commercial Patent License',
+    license='CC-BY-NC-SA-4.0',
     packages=find_packages(),  # More robust than hardcoding 'infinitysearch'
     ext_modules=ext_modules,
     install_requires=[
@@ -40,7 +40,6 @@ setup(
     python_requires='>=3.9',
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: Other/Proprietary License",
         "Operating System :: OS Independent"
     ],
 )
