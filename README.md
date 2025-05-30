@@ -139,7 +139,7 @@ model.prepare_query(X_query, n=10, k=5)
 
 ---
 
-### `query(v: np.ndarray, n: int = 1, k: int = 1)`
+### `query_one(v: np.ndarray, n: int = 1, k: int = 1)`
 
 Searches for the nearest neighbors of a single input vector `v`.
 
@@ -159,7 +159,7 @@ neighbors = model.query(v_single, n=10, k=3)
 
 ---
 
-### `run_batch_query(X: np.ndarray, n: int = 1, k: int = 1)`
+### `query(X: np.ndarray, n: int = 1, k: int = 1)`
 
 Retrieves the top-k neighbors for a batch of preprocessed queries.
 

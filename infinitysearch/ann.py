@@ -191,14 +191,29 @@ class InfinitySearch(BaseANN):
         self.totalk = max(n, k)
         self._prepared = True
 
-    def query(self, v: np.ndarray, n: int = 1, k: int = 1):
-        if not self._prepared:
-            self.prepare_query(v, n=n, k=k)
-        result = self.index.search(self.totalk, self.topk, self.query_embed, self.queries_np, False)
-        self._prepared = False
-        return result
+    def query_one(self, x: np.ndarray, n: int = 1, k: int = 1):
+        """
+        Query a single 1D input vector `x`, safely preparing it and returning the top-k result.
+        """
+        if x.ndim != 1:
+            raise ValueError("Expected a single query vector with shape (D,), got shape {}".format(x.shape))
 
-    def run_batch_query(self, X: np.ndarray = None, n: int = 1, k: int = 1):
+        # Prepare a single-vector batch (shape: (1, D))
+        X = x[None]
+        self.prepare_query(X, n=n, k=k)
+
+        # Run and return the first result
+        result = self.index.search_batch(
+            self.totalk,
+            self.topk,
+            self.query_embed,
+            self.queries_np,
+            False
+        )
+        self._prepared = False
+        return result[0]
+
+    def query(self, X: np.ndarray = None, n: int = 1, k: int = 1):
         if not self._prepared:
             if X is None:
                 raise ValueError("No query data provided for automatic preparation.")
