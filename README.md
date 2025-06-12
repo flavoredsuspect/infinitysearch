@@ -15,7 +15,7 @@ Infinity Search: Approximate Vector Search with Projections on q-Metric Spaces i
 Install with pip:
 
 ```bash
-pip install .
+pip install infinitysearch
 ```
 
 ---
