@@ -103,7 +103,7 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:boo
                 pred_dists = emb_dist(emb_val, emb_train, metric=emb_metric).cpu().numpy()
                 gt_dists = emb_dist(val_X, train_X, metric=metric).cpu().numpy()
                 knn = np.argsort(pred_dists, axis=1)[:, :1]
-                true_knn = np.argsort(gt_dists, axis=1)[:, :1]
+                true_knn = np.argsort(gt_dists, axis=1)[:, :100]
                 rel_error = rel(true_knn, knn)
                 return rel_error
         except RuntimeError as e:

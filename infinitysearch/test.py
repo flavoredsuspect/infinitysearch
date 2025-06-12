@@ -1,129 +1,131 @@
 
 from __future__ import annotations
 import itertools, os, tempfile, time, argparse
-from pathlib import Path
-
+from infinitysearch.utils import rel
+import torch
 import numpy as np
-import numpy.linalg as npl
+import matplotlib.pyplot as plt
 from scipy.spatial.distance import cdist
 from tensorflow.keras.datasets import fashion_mnist
-
-from infinitysearch.ann import InfinitySearch
-from infinitysearch.utils import rel
+from collections import defaultdict
+from infinitysearch import InfinitySearch
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--q', type=int, default=20, help='q-metric')
-    parser.add_argument('--n', type=int, default=10000, help='Total number of points')
-    # Default is now 'last'
-    parser.add_argument('--config', type=str, default="last", help="'optuna', 'last', or leave empty for manual config")
-    args = parser.parse_args()
+    import torch
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from tensorflow.keras.datasets import fashion_mnist
+    from collections import defaultdict
+    from infinitysearch import InfinitySearch
 
-    (xtr, _), (xte, _) = fashion_mnist.load_data()
-    data = np.concatenate((xtr, xte), axis=0).reshape(-1, 28 * 28) / 255.0
-    data = data[:args.n]
+    # Load Fashion-MNIST
+    (xtr, ytr), (xte, yte) = fashion_mnist.load_data()
+    raw_data = np.concatenate((xtr, xte), axis=0)[:10000]
+    labels = np.concatenate((ytr, yte), axis=0)[:10000]
+
+    data = raw_data.reshape(-1, 784) / 255.0
     split = int(0.8 * len(data))
     train, query = data[:split], data[split:]
+    train_labels, query_labels = labels[:split], labels[split:]
+    raw_train = raw_data[:split]
+    raw_query = raw_data[split:]
 
-    infsearch = InfinitySearch(q=args.q)
-    infsearch.fit(train, config=args.config)
+    train_torch = torch.tensor(train, dtype=torch.float32)
+    query_torch = torch.tensor(query, dtype=torch.float32)
 
-    infsearch.prepare_query(query, n=1)
-    start = time.time()
-    results = infsearch.query()
-    elapsed = time.time() - start
-    qps = len(query) / elapsed
-    print(f"Queried {len(query)} points in {elapsed:.8f}s ({qps:.8f} q/s)")
+    def emb_dist(a, b=None, metric="euclidean"):
+        if b is None:
+            b = a
+        if metric == "cosine":
+            a = torch.nn.functional.normalize(a, dim=-1)
+            b = torch.nn.functional.normalize(b, dim=-1)
+        if metric == "euclidean":
+            return torch.cdist(a, b, p=2)
+        elif metric == "manhattan":
+            return torch.cdist(a, b, p=1)
+        elif metric == "cosine":
+            return 1 - torch.matmul(a, b.transpose(0, 1))
+        elif metric == "correlation":
+            a_centered = a - a.mean(dim=1, keepdim=True)
+            b_centered = b - b.mean(dim=1, keepdim=True)
+            a_norm = a_centered / a_centered.norm(dim=1, keepdim=True)
+            b_norm = b_centered / b_centered.norm(dim=1, keepdim=True)
+            return 1 - torch.matmul(a_norm, b_norm.transpose(0, 1))
+        else:
+            raise ValueError(f"Unknown metric: {metric}")
 
-    true_nn = np.argsort(cdist(query, train), axis=1)[:, :1]
-    rel_err = rel(true_nn, results)
-    print(f"Mean absolute relative error: {rel_err:.4f}")
+    metric = "euclidean"
+    dist = emb_dist(query_torch, train_torch, metric=metric).numpy()
+    true_nn = np.argsort(dist, axis=1)[:, :100]
 
-    # Save the model and config
-    infsearch.save("test")
+    search = InfinitySearch(q=5)
+    search.fit(train, config={"metric": metric, "name": metric})
+    search.prepare_query(query, n=1)
+    pred = search.query()
 
-# --------------------------------------------------------------------------- #
-def _custom_cosine(a: np.ndarray, b: np.ndarray) -> float:
-    denom = (np.linalg.norm(a) * np.linalg.norm(b)) + 1e-9
-    return 1.0 - float(np.dot(a, b) / denom)
+    # Compute rank error for each query
+    rank_errors = []
+    for i in range(len(query)):
+        try:
+            rank = list(true_nn[i]).index(pred[i][0])
+        except ValueError:
+            rank = 100  # not found
+        rank_errors.append(rank)
+    rank_errors = np.array(rank_errors)
 
+    # Group queries by label and compute average error
+    per_class_errors = defaultdict(list)
+    for i, label in enumerate(query_labels):
+        per_class_errors[label].append((rank_errors[i], i))  # (error, idx)
 
-_Q_VALUES  = [1, 2, 5, np.inf]
-_BUILTINS  = ["euclidean", "manhattan", "cosine", "correlation"]
-_DICT_CFG  = {
-    "output_dim": 64,
-    "emb_metric": "correlation",
-    "batch_size": 128,
-    "epochs": 5,
-    "lr": 1e-3,
-    "lambda_stress": 2.0,
-    "input_dim": 784,
-}
+    # Compute average per-class error and sort
+    avg_per_class = [(lbl, np.mean([e for e, _ in v])) for lbl, v in per_class_errors.items()]
+    top_classes = sorted(avg_per_class, key=lambda x: x[1])[:4]  # best 4 classes
 
-# --------------------------------------------------------------------------- #
-def _prepare_data(n_total: int):
-    (xtr, _), (xte, _) = fashion_mnist.load_data()
-    data = (
-        np.concatenate([xtr, xte]).astype("float32").reshape(-1, 28 * 28) / 255.0
-    )[: n_total]
-    split = int(0.8 * n_total)
-    return data[:split], data[split:]
+    # Pick best query from each of those classes
+    best_queries = []
+    for lbl, _ in top_classes:
+        best_idx = min(per_class_errors[lbl], key=lambda x: x[0])[1]
+        best_queries.append((lbl, best_idx))
 
+    class_names = {
+        0: "T-shirt", 1: "Trouser", 2: "Pullover", 3: "Dress", 4: "Coat",
+        5: "Sandal", 6: "Shirt", 7: "Sneaker", 8: "Bag", 9: "Ankle boot"
+    }
 
-def _exact_nn(train, qry, k=1):
-    return np.argsort(cdist(qry, train), axis=1)[:, :k]
+    # Build image triples
+    images = []
+    row_labels = []
+    for label, q_idx in best_queries:
+        row_labels.append(class_names[label])
+        true_idx = true_nn[q_idx][0]
+        ret_idx = pred[q_idx][0]
 
+        q_img = np.stack([raw_query[q_idx]] * 3, axis=-1)
+        true_img = np.stack([raw_train[true_idx]] * 3, axis=-1)
+        ret_img = np.stack([raw_train[ret_idx]] * 3, axis=-1)
 
-def print_banner(title):
-    print("\n" + "=" * 80)
-    print(f"▶ {title}")
-    print("=" * 80)
+        images.append((q_img, true_img, ret_img))
 
-def print_header(tag, q, me, mr, cfg):
-    print_banner(tag)
-    print(f"  q = {q}")
-    print(f"  metric_embed = {me}")
-    print(f"  metric_real  = {mr}")
-    print(f"  config spec  = {cfg}")
+    # Plot
+    fig, axes = plt.subplots(4, 3, figsize=(12, 16))
+    titles = ["Query", "True NN", "Returned NN"]
 
-def _one_pass(q, me, mr, cfg, train, qry, tag, verbose=False):
-    if isinstance(cfg, dict):
-        cfg = dict(cfg)
-        cfg["metric"] = mr
-        cfg["emb_metric"] = me
+    for i in range(4):
+        for j in range(3):
+            ax = axes[i, j]
+            ax.imshow(images[i][j])
+            ax.axis('off')
+            if i == 0:
+                ax.set_title(titles[j], fontsize=24)
+            if j == 0:
+                ax.text(-0.5, 14, row_labels[i], fontsize=24,
+                        rotation=90, va='center', ha='right', transform=ax.transData)
 
-    if verbose:
-        print_header(tag, q, me, mr, cfg)
-
-    t0 = time.time()
-    search = InfinitySearch(q=q)
-    search.fit(train, config=cfg, verbose=False)
-
-    # Prepare and run full batch query
-    search.prepare_query(qry, n=1)
-    t1 = time.time()
-    results = search.query()
-    t2 = time.time()
-
-    qps = len(qry) / (t2 - t1)
-    err = rel(np.argsort(cdist(qry, train), axis=1)[:, :1], results)
-    print(f"🧪 query@1 | rel_err = {err:.4f} | qps = {qps:.2f}")
-
-    # Show an example query result
-    first = search.query_one(qry[0])
-    print(f"🔍 example query: {first}")
-
-    # Save and reload test
-    search.save(tag)
-    loaded = InfinitySearch.load(tag)
-    loaded.prepare_query(qry, n=1)
-    results2 = loaded.query()
-    err2 = rel(np.argsort(cdist(qry, train), axis=1)[:, :1], results2)
-    assert np.allclose(err, err2, atol=1e-3), "Loaded model mismatch!"
-
-    InfinitySearch.remove(tag)
-    return err, qps
+    plt.savefig("/home/antonio/h.svg", bbox_inches="tight")
+    plt.savefig("/home/antonio/h.png", bbox_inches="tight")
+    print("✅ Saved 4-class figure as 'h.svg' and 'h.png'")
 
 
 def test(quick=False, verbose=True):
@@ -152,6 +154,6 @@ def test(quick=False, verbose=True):
     print_banner("✅ Finished All Tests")
 
 if __name__ == "__main__":
-    main()
+    main_kosarak()
 
 

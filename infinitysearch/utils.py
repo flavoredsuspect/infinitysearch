@@ -41,6 +41,11 @@ def emb_dist(a: torch.Tensor, b: torch.Tensor = None, metric: str = "euclidean")
         a_norm = a_centered / a_centered.norm(dim=1, keepdim=True)
         b_norm = b_centered / b_centered.norm(dim=1, keepdim=True)
         return 1 - torch.matmul(a_norm, b_norm.transpose(0, 1))
+    elif metric == "jaccard":
+        a_b, b_b = a.bool(), b.bool()
+        inter = a_b.float() @ b_b.T.float()
+        union = a_b.sum(1, keepdim=True) + b_b.sum(1, keepdim=True).T - inter
+        return 1 - inter / union.clamp(min=1e-8)
     else:
         raise ValueError(f"Unknown embedding metric: {metric}")
 def lambda_to_cpp_metric(pyfunc):

@@ -71,7 +71,9 @@ class InfinitySearch(BaseANN):
             emb = model(X)
             D_emb = emb_metric_fn(emb) if emb_metric_fn else emb_dist(emb, metric=emb_metric)
             mask = M.float()
-            loss_s = torch.sqrt(((D_emb - M) ** 2 * mask).sum() / mask.sum())
+            # detach distance matrix to avoid massive autograd graph
+            loss_s = torch.sqrt(((D_emb.detach() - M) ** 2 * mask).sum() / mask.sum())
+
             idx = torch.randint(0, n, (batch_size, 3), device=self.device)
             i, j, k = idx.t()
             raw = emb_dist(emb[i], emb[j], metric=emb_metric) + emb_dist(emb[j], emb[k], metric=emb_metric) - emb_dist(emb[i], emb[k], metric=emb_metric)
@@ -88,8 +90,34 @@ class InfinitySearch(BaseANN):
         X_tensor = torch.tensor(X)
 
         if isinstance(config, dict):
-            print("🔧 Running Optuna with fixed parameters...")
-            config_dict = run_optuna_search(X, self._q, fixed=config, verbose=verbose)
+            cache_dir = os.path.expanduser("~/.cache/infinitysearch/")
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_file = os.path.join(cache_dir, "configs.json")
+            if os.path.exists(cache_file):
+                with open(cache_file, "r") as f:
+                    all_configs = json.load(f)
+            else:
+                all_configs = {}
+
+            name = config.get("name")
+            if name and name in all_configs:
+                print(f"📂 Found saved config '{name}', loading it.")
+                config_dict = all_configs[name]
+            else:
+                print("🔧 Running Optuna with fixed parameters...")
+                config_dict = run_optuna_search(X, self._q, fixed=config, verbose=verbose)
+                if name:
+                    print(f"💾 Saving config as '{name}'")
+                    all_configs[name] = {k: v for k, v in config_dict.items() if k != "model"}
+
+            print(f"🔍 config_dict before saving: {config_dict}")
+
+            try:
+                with open(cache_file, "w") as f:
+                    json.dump(all_configs, f, indent=2)
+                print(f"✅ Wrote config '{name}' to {cache_file}")
+            except Exception as e:
+                print(f"❌ Failed to write config: {e}")
 
         else:
             cache_dir = os.path.expanduser("~/.cache/infinitysearch/")
