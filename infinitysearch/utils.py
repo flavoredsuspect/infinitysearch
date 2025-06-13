@@ -34,7 +34,9 @@ def emb_dist(a: torch.Tensor, b: torch.Tensor = None, metric: str = "euclidean")
     elif metric == "manhattan":
         return torch.cdist(a, b, p=1)
     elif metric == "cosine":
-        return 1 - torch.matmul(a, b.transpose(0, 1))
+        a_n = torch.nn.functional.normalize(a, p=2, dim=1)
+        b_n = torch.nn.functional.normalize(b, p=2, dim=1)
+        return 1.0 - a_n @ b_n.T
     elif metric == "correlation":
         a_centered = a - a.mean(dim=1, keepdim=True)
         b_centered = b - b.mean(dim=1, keepdim=True)

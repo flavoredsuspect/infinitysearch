@@ -67,10 +67,10 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:boo
             train_X, val_X = X_sample[:-val_split], X_sample[-val_split:]
 
             output_dim = fixed.get("output_dim") or trial.suggest_int("output_dim", dim_in // 3, int(dim_in * 1.5))
-            emb_metric = fixed.get("emb_metric") or trial.suggest_categorical("emb_metric", ["euclidean", "manhattan"])
+            emb_metric = fixed.get("emb_metric") or trial.suggest_categorical("emb_metric", ["euclidean", "manhattan", "cosine"])
             metric = fixed.get("metric", "euclidean")
             batch_size = fixed.get("batch_size") or trial.suggest_categorical("batch_size", [128, 256, 512])
-            epochs = fixed.get("epochs") or trial.suggest_int("epochs", 50, 200)
+            epochs = fixed.get("epochs") or trial.suggest_int("epochs", 50, 500)
             lr = fixed.get("lr") or trial.suggest_float("lr", 1e-4, 1e-2, log=True)
             lambda_stress = fixed.get("lambda_stress") or trial.suggest_float("lambda_stress", 0.1, 5.0)
 

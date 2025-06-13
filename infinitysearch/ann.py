@@ -49,6 +49,16 @@ class InfinitySearch(BaseANN):
         full_X = X
         D0 = metric_fn(X) if metric_fn else emb_dist(X, metric=metric)
 
+        def knn_masked(D, k=10):
+            topk = torch.topk(D, k, largest=False).indices
+            mask = torch.full_like(D, float('inf'))
+            row_idx = torch.arange(D.size(0)).unsqueeze(1)
+            mask[row_idx, topk] = D[row_idx, topk]
+            return mask
+
+        D0_masked = knn_masked(D0, k=30)
+        M = fermat_gpu_exact(D0_masked, q)
+
         try:
             M = fermat_gpu_exact(D0, q)
         except RuntimeError as e:
@@ -69,7 +79,15 @@ class InfinitySearch(BaseANN):
         for ep in range(epochs):
             model.train()
             emb = model(X)
-            D_emb = emb_metric_fn(emb) if emb_metric_fn else emb_dist(emb, metric=emb_metric)
+            # Assume `emb` is your embedding tensor
+            if emb_metric_fn is not None:
+                if callable(emb_metric_fn):
+                    D_emb = emb_metric_fn(emb)  # Custom function
+                else:
+                    D_emb = emb_dist(emb, metric=emb_metric_fn)  # Treat as string
+            else:
+                D_emb = emb_dist(emb, metric='euclidean')  # Default fallback
+
             mask = M.float()
             # detach distance matrix to avoid massive autograd graph
             loss_s = torch.sqrt(((D_emb.detach() - M) ** 2 * mask).sum() / mask.sum())
@@ -85,9 +103,12 @@ class InfinitySearch(BaseANN):
         final_emb = model(full_X)
         return model, final_emb, D0, self.device, None
 
+
+
     def fit(self, X: np.ndarray, config: dict | str | torch.nn.Module | None = "optuna", verbose: bool = True):
         X = X.astype(np.float32)
         X_tensor = torch.tensor(X)
+
 
         if isinstance(config, dict):
             cache_dir = os.path.expanduser("~/.cache/infinitysearch/")
@@ -161,13 +182,12 @@ class InfinitySearch(BaseANN):
             print(f"Training model with config: {config}")
         metric_fn = config_dict.get("metric_fn", None)
         emb_metric_fn = config_dict.get("emb_metric_fn", None)
-
         model = config_dict.get("model", None)
         model, _, D0, device, _ = self.train_inductive_model(
             X_tensor,
             q=config_dict.get("q", self._q),
             k_neighbors=config_dict.get("k_neighbors", 50),
-            epochs=config_dict.get("epochs", 200),
+            epochs=config_dict.get("epochs", 500),
             batch_size=config_dict.get("batch_size", 1024),
             lr=config_dict.get("lr", 1e-3),
             lambda_stress=config_dict.get("lambda_stress", 1.0),
@@ -196,8 +216,8 @@ class InfinitySearch(BaseANN):
 
             self.index = vp_tree.VpTree(
                 self._q,
-                lambda_to_cpp_metric(emb_metric_raw) if callable(emb_metric_raw) else metric_enum_map.get(emb_metric_raw, -1),
-                lambda_to_cpp_metric(metric_raw) if callable(metric_raw) else metric_enum_map.get(metric_raw, -1)
+                lambda_to_cpp_metric(emb_metric_raw) if callable(emb_metric_raw) else metric_enum_map.get(emb_metric_raw, "euclidean"),
+                lambda_to_cpp_metric(metric_raw) if callable(metric_raw) else metric_enum_map.get(metric_raw,  "euclidean")
             )
         else:
             self.index = vp_tree.VpTree(
@@ -215,6 +235,8 @@ class InfinitySearch(BaseANN):
             self.query_embed = self.model(
                 torch.tensor(X, dtype=torch.float32).to(self.device)
             ).cpu().numpy()
+
+
         self.topk = k
         self.totalk = max(n, k)
         self._prepared = True
