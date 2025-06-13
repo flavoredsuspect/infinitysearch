@@ -266,9 +266,9 @@ The following plots show the speed–accuracy tradeoff of InfinitySearch (yellow
 
 | Dataset           | k = 1 | k = 5 | k = 10 |
 | ----------------- | ----- | ----- | ------ |
-| **Fashion-MNIST** | ![](benchmarks/mnist-batch1.png) | ![](benchmarks/mnist-batch5.png) | ![](benchmarks/mnist-batch10.png) |
-| **GIST**          | ![](benchmarks/gist-batch1.png)  | ![](benchmarks/gist-batch5.png)  | ![](benchmarks/gist-batch10.png)  |
-| **Kosarak**       | ![](benchmarks/kosarak-batch1.png) | ![](benchmarks/kosarak-batch5.png) | ![](benchmarks/kosarak-batch10.png) |
+| **Fashion-MNIST** | ![](benchmarks/mnistK1.png) | ![](benchmarks/mnistK5.png) | ![](benchmarks/mnistK10.png) |
+| **GIST**          | ![](benchmarks/gistK1.png)  | ![](benchmarks/gistK5.png)  | ![](benchmarks/gistK10.png)  |
+| **Kosarak**       | ![](benchmarks/kosarakK1.png) | ![](benchmarks/kosarakK5.png) | ![](benchmarks/kosarakK10.png) |
 
 ---
 
