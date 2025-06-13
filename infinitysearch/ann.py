@@ -49,15 +49,6 @@ class InfinitySearch(BaseANN):
         full_X = X
         D0 = metric_fn(X) if metric_fn else emb_dist(X, metric=metric)
 
-        def knn_masked(D, k=10):
-            topk = torch.topk(D, k, largest=False).indices
-            mask = torch.full_like(D, float('inf'))
-            row_idx = torch.arange(D.size(0)).unsqueeze(1)
-            mask[row_idx, topk] = D[row_idx, topk]
-            return mask
-
-        D0_masked = knn_masked(D0, k=30)
-        M = fermat_gpu_exact(D0_masked, q)
 
         try:
             M = fermat_gpu_exact(D0, q)
@@ -216,8 +207,8 @@ class InfinitySearch(BaseANN):
 
             self.index = vp_tree.VpTree(
                 self._q,
-                lambda_to_cpp_metric(emb_metric_raw) if callable(emb_metric_raw) else metric_enum_map.get(emb_metric_raw, "euclidean"),
-                lambda_to_cpp_metric(metric_raw) if callable(metric_raw) else metric_enum_map.get(metric_raw,  "euclidean")
+                lambda_to_cpp_metric(emb_metric_raw) if callable(emb_metric_raw) else metric_enum_map.get(emb_metric_raw, -1),
+                lambda_to_cpp_metric(metric_raw) if callable(metric_raw) else metric_enum_map.get(metric_raw, -1)
             )
         else:
             self.index = vp_tree.VpTree(

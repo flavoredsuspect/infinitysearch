@@ -42,12 +42,15 @@ class EmbNet(nn.Module):
 
 
 import optuna
-import torch
-import os
-import json
-import numpy as np
-def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:bool = True):
+def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose: bool = True):
     import optuna
+    import torch
+    import os
+    import json
+    import numpy as np
+    from torch.utils.data import DataLoader, TensorDataset
+    from torch import nn
+    from torch.nn import functional as F
     from .utils import rel, emb_dist
     from .models import EmbNet
     from .fermat import fermat_gpu_exact, fermat_gpu_approx
@@ -55,7 +58,6 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:boo
     if fixed is None:
         fixed = {}
     X = torch.as_tensor(X, dtype=torch.float32) if not isinstance(X, torch.Tensor) else X
-
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def objective(trial):
@@ -67,10 +69,13 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:boo
             train_X, val_X = X_sample[:-val_split], X_sample[-val_split:]
 
             output_dim = fixed.get("output_dim") or trial.suggest_int("output_dim", dim_in // 3, int(dim_in * 1.5))
+            hidden_dim = fixed.get("hidden_dim") or trial.suggest_int("hidden_dim", 128, 512)
+            num_layers = fixed.get("num_layers") or trial.suggest_int("num_layers", 0, 4)
+            activation = fixed.get("activation") or trial.suggest_categorical("activation", ["relu", "gelu"])
             emb_metric = fixed.get("emb_metric") or trial.suggest_categorical("emb_metric", ["euclidean", "manhattan"])
             metric = fixed.get("metric", "euclidean")
             batch_size = fixed.get("batch_size") or trial.suggest_categorical("batch_size", [128, 256, 512])
-            epochs = fixed.get("epochs") or trial.suggest_int("epochs", 50, 500)
+            epochs = fixed.get("epochs") or trial.suggest_int("epochs", 50, 300)
             lr = fixed.get("lr") or trial.suggest_float("lr", 1e-4, 1e-2, log=True)
             lambda_stress = fixed.get("lambda_stress") or trial.suggest_float("lambda_stress", 0.1, 5.0)
 
@@ -84,18 +89,34 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:boo
                     M = fermat_gpu_approx(D0, q=q, k=20, num_iters=1000, lr=0.05)
                 else:
                     raise
-
             M = (M - M.min()) / (M.max() - M.min())
-            model = EmbNet(train_X.shape[1], output_dim=output_dim).to(device)
+
+            model = EmbNet(
+                input_dim=dim_in,
+                output_dim=output_dim,
+                hidden_dim=hidden_dim,
+                num_layers=num_layers,
+                activation=activation
+            ).to(device)
+
             opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
+            dataset = DataLoader(train_X, batch_size=batch_size, shuffle=True)
 
             for ep in range(epochs):
                 model.train()
-                emb = model(train_X)
-                D_emb = emb_dist(emb, metric=emb_metric)
-                mask = M.float()
-                loss_s = torch.sqrt(((D_emb - M) ** 2 * mask).sum() / mask.sum())
-                opt.zero_grad(); loss_s.backward(); opt.step()
+                for batch in dataset:
+                    emb = model(batch)
+                    D_emb = emb_dist(emb, metric=emb_metric)
+                    with torch.no_grad():
+                        idx = torch.arange(batch.shape[0], device=device)
+                        full_idx = torch.arange(train_X.shape[0], device=device)
+                        M_sub = emb_dist(batch, train_X, metric=metric)
+                        M_sub = (M_sub - M_sub.min()) / (M_sub.max() - M_sub.min())
+                    mask = M_sub.float()
+                    loss_s = torch.sqrt(((D_emb - mask[:, :batch.shape[0]]) ** 2 * mask[:, :batch.shape[0]]).sum() / mask[:, :batch.shape[0]].sum())
+                    opt.zero_grad()
+                    loss_s.backward()
+                    opt.step()
 
             with torch.no_grad():
                 emb_train = model(train_X)
@@ -116,7 +137,13 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:boo
     study.optimize(objective, n_trials=50)
 
     best = study.best_trial.params
-    best["model"] = EmbNet(X.shape[1], output_dim=best["output_dim"]).to(device)
+    best["model"] = EmbNet(
+        input_dim=X.shape[1],
+        output_dim=best["output_dim"],
+        hidden_dim=best["hidden_dim"],
+        num_layers=best["num_layers"],
+        activation=best["activation"]
+    ).to(device)
 
     cache_path = os.path.expanduser("~/.cache/infinitysearch/last_config.json")
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -125,4 +152,5 @@ def run_optuna_search(X: torch.Tensor, q: float, fixed: dict = None, verbose:boo
         json.dump(json_ready, f)
 
     return best
+
 
